@@ -1,6 +1,6 @@
 import React from 'react';
 import ReactDOM from 'react-dom/client';
-import { BrowserRouter } from 'react-router-dom';
+import { HashRouter } from 'react-router-dom';
 import App from '@/App';
 import { AuthProvider } from '@/context/AuthContext';
 import { LanguageProvider } from '@/context/LanguageContext';
@@ -15,9 +15,9 @@ ReactDOM.createRoot(document.getElementById('root')).render(
     <AuthProvider>
       <LanguageProvider>
         <AppProvider>
-          <BrowserRouter>
+          <HashRouter>
             <App />
-          </BrowserRouter>
+          </HashRouter>
         </AppProvider>
       </LanguageProvider>
     </AuthProvider>
