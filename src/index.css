@@ -1,0 +1,71 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@layer base {
+  /* Centralised government design tokens (mirror tailwind.config.js). */
+  :root {
+    --gp-navy: #12355B;
+    --gp-dark-navy: #0B2447;
+    --gp-saffron: #F28C28;
+    --gp-background: #F4F6F8;
+    --gp-surface: #FFFFFF;
+    --gp-border: #D8DEE6;
+    --gp-text: #1F2937;
+    --gp-muted: #5B6573;
+    --gp-success: #2E7D32;
+    --gp-warning: #ED6C02;
+    --gp-danger: #C62828;
+    --gp-info: #1565C0;
+    --gp-ai: #4F46A5;
+  }
+  html {
+    -webkit-font-smoothing: antialiased;
+  }
+  body {
+    @apply bg-gov-bg text-gov-ink font-sans;
+  }
+  /* Government portals keep focus rings very visible for accessibility compliance */
+  :focus-visible {
+    @apply outline-none ring-2 ring-saffron-500 ring-offset-2 ring-offset-white;
+  }
+}
+
+@layer components {
+  /* The thin saffron-white-green accent line used on official portals */
+  .tricolour-strip {
+    height: 3px;
+    background: linear-gradient(
+      to right,
+      #F28C28 0%,
+      #F28C28 33.33%,
+      #FFFFFF 33.33%,
+      #FFFFFF 66.66%,
+      #2E7D32 66.66%,
+      #2E7D32 100%
+    );
+  }
+
+  /* AI-assisted insight surface (subtle indigo, used sparingly). */
+  .ai-insight {
+    @apply rounded-gov border border-ai-border bg-ai-light;
+  }
+
+  /* Startup India style heading: bold title with a short saffron underline */
+  .heading-underline::after {
+    content: '';
+    @apply mt-2 block h-1 w-12 rounded-full bg-saffron-500;
+  }
+
+  .gov-card {
+    @apply rounded-gov border border-gov-border bg-white shadow-card;
+  }
+}
+
+/* Print: show only the compliance report, hide the app chrome. */
+@media print {
+  body * { visibility: hidden; }
+  .print-report, .print-report * { visibility: visible; }
+  .print-report { position: absolute; inset: 0; margin: 0; padding: 24px; }
+  .no-print { display: none !important; }
+}
