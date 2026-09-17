@@ -3,6 +3,7 @@ import { AppHeader } from '@/components/layout/AppHeader';
 import { Sidebar } from '@/components/layout/Sidebar';
 import { Breadcrumb } from '@/components/layout/Breadcrumb';
 import { Toast } from '@/components/common/Toast';
+import { AIAgentWidget } from '@/components/common/AIAgentWidget';
 
 /** Shell for every authenticated screen: government header on top, navy rail on the left. */
 export function AppLayout() {
@@ -19,6 +20,9 @@ export function AppLayout() {
         </main>
       </div>
       <Toast />
+      {/* Global AI Agent Widget — floats over all pages */}
+      <AIAgentWidget />
     </div>
   );
 }
+

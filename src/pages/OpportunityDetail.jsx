@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import {
   ArrowLeft, Sparkles, ListChecks, FileText, ShieldCheck, PenLine,
-  ShieldAlert, Clock, RefreshCw, Info,
+  ShieldAlert, Clock, RefreshCw, Info, AlertCircle,
 } from 'lucide-react';
 import { useApp } from '@/context/AppContext';
 import { getOpportunity } from '@/data/opportunities';
@@ -58,10 +58,12 @@ export default function OpportunityDetail() {
 
   const [analyzing, setAnalyzing] = useState(false);
   const [step, setStep] = useState(0);
+  const [analyzeError, setAnalyzeError] = useState(null);
   const stepTimer = useRef(null);
   const result = qualifications[id];
   const compliance = complianceResults[id];
   const status = getOpportunityStatus(id);
+  const snsSource = result?._meta?.source;
 
   useEffect(() => () => clearInterval(stepTimer.current), []);
 
@@ -78,17 +80,21 @@ export default function OpportunityDetail() {
 
   async function runQualification() {
     setAnalyzing(true);
+    setAnalyzeError(null);
     setStep(0);
-    // Advance the staged progress indicator while the mock workflow runs.
+    // Advance the staged progress indicator while the workflow runs.
     stepTimer.current = setInterval(
       () => setStep((s) => Math.min(s + 1, QUALIFICATION_STEPS.length - 1)),
       320,
     );
-    // React Page -> Service -> snsWorkbench (mock now, SNS Workbench later)
+    // React Page → snsWorkbench service → /api/agent/execute proxy → SNS Agent Workbench
     const res = await analyzeOpportunity(profile, documents, opportunity);
     clearInterval(stepTimer.current);
     saveMatchResult(opportunity.id, res);
     if (getOpportunityStatus(opportunity.id) === 'New') markOpportunityStatus(opportunity.id, 'Reviewing');
+    if (res._meta?.source?.includes('Fallback')) {
+      setAnalyzeError({ type: 'warning', message: `SNS Agent Workbench is inactive — qualification was run by the Local Engine. Activate your workflow in the Workbench to use AI analysis.` });
+    }
     setAnalyzing(false);
   }
 
@@ -123,6 +129,18 @@ export default function OpportunityDetail() {
           validated by the responsible team.
         </span>
       </div>
+
+      {/* SNS Agent Workbench status banner */}
+      {analyzeError && (
+        <div className={`mb-6 flex items-start gap-2 rounded-gov border px-4 py-3 text-sm ${
+          analyzeError.type === 'warning'
+            ? 'border-gov-amber/40 bg-gov-amberLight text-gov-amber'
+            : 'border-red-200 bg-gov-redLight text-gov-red'
+        }`}>
+          <AlertCircle className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{analyzeError.message}</span>
+        </div>
+      )}
 
       {/* Status control */}
       <Card className="mb-6">
@@ -162,9 +180,19 @@ export default function OpportunityDetail() {
               <ShieldCheck className="h-4 w-4" /> Qualification complete
               <span className="inline-flex items-center gap-1 font-normal text-gov-muted"><Clock className="h-3.5 w-3.5" /> Analyzed {relativeTime(result.analyzedAt)}</span>
             </p>
-            <Button variant="outlineSaffron" onClick={runQualification}>
-              <RefreshCw className="h-4 w-4" /> Re-run Qualification
-            </Button>
+            <div className="flex items-center gap-2">
+              {snsSource && (
+                <span className={`inline-flex items-center gap-1 rounded-full px-2.5 py-0.5 text-xs font-medium ${
+                  snsSource.includes('Fallback') ? 'bg-gov-amberLight text-gov-amber' : 'bg-ai-light text-ai-DEFAULT'
+                }`}>
+                  <Sparkles className="h-3 w-3" />
+                  {snsSource.includes('Fallback') ? 'Local Engine' : 'SNS Agent Workbench'}
+                </span>
+              )}
+              <Button variant="outlineSaffron" onClick={runQualification}>
+                <RefreshCw className="h-4 w-4" /> Re-run Qualification
+              </Button>
+            </div>
           </div>
 
           {/* 2. Match score + 3. breakdown */}

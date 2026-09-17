@@ -1,99 +1,167 @@
 // ---------------------------------------------------------------------------
-// SNS Workbench service layer.
+// SNS Workbench service layer — production wiring + fallback
 //
-// Every page reaches the "AI" through this module, never directly. Today each
-// function resolves a deterministic MOCK derived from local data; in a later
-// phase the bodies are swapped to POST to the SNS Workbench webhook and return
-// the structured JSON it produces. No page or component needs to change when
-// that swap happens.
+// Every page reaches the AI through this module, never directly. Each function:
+//   1. Attempts a real call to the SNS Agent Workbench via the local proxy.
+//   2. On success, returns the agent's structured JSON response.
+//   3. On network error / timeout / 404 / inactive agent, falls back gracefully
+//      to the deterministic local engines (qualificationEngine, complianceEngine
+//      etc.) so the UI is never broken, even when the backend is inactive.
 //
-//   React Page → Context / Service → snsWorkbench.js → [ mock now | SNS later ]
+//   React Page → Context / Service → snsWorkbench.js → /api/agent/execute (proxy)
+//                                                     → api.agents.snsihub.ai
 //
-// TODO (Phase 7+): replace each mock body with a callSNSWorkbench() request.
+// Agent endpoint: https://api.agents.snsihub.ai
+// Form ID:        44a7adcb-5c25-4ef8-af59-5f0d2ab1b05f
 // ---------------------------------------------------------------------------
 
-import { API_URL, simulateAiDelay } from '@/lib/api';
+import { callSNSAgent, sendAgentChat } from '@/lib/api';
 import { runQualification } from '@/utils/qualificationEngine';
 import { createProposalDraft, generateSectionContent } from '@/data/proposalSections';
 import { buildComplianceResult } from '@/utils/complianceEngine';
 
-/**
- * The single real network entry point. Unused while mocks are active, but
- * kept here so the wiring is obvious for the integration phase.
- * @param {string} workflow  SNS Workbench workflow name
- * @param {unknown} payload
- */
-export async function callSNSWorkbench(workflow, payload) {
-  try {
-    const response = await fetch(API_URL, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ workflow, payload }),
-    });
-    return await response.json();
-  } catch (error) {
-    console.error('SNS Workbench API error:', error);
-    return null;
-  }
+// Re-export for backwards compat so any direct consumer of callSNSWorkbench still works
+export { sendAgentChat as callSNSWorkbench };
+
+// ---------------------------------------------------------------------------
+// Internal helpers
+// ---------------------------------------------------------------------------
+
+/** Extract text from an agent response envelope regardless of field naming. */
+function extractAgentText(data) {
+  if (!data) return null;
+  return data.reply || data.message || data.content || data.text || data.output || null;
 }
 
-// --- Workflow stubs -------------------------------------------------------
-// Each mirrors an SNS Workbench workflow and returns a mock Promise for now.
+/**
+ * Try the SNS Agent Workbench; return { result, isFallback, agentReply }.
+ * On any failure the caller receives isFallback = true and should use local engines.
+ */
+async function tryAgent(workflow, payload) {
+  try {
+    const res = await callSNSAgent('workflow', { workflow, ...payload });
+    if (res.success && res.data) {
+      return { result: res.data, isFallback: false, agentReply: extractAgentText(res.data), latencyMs: res.latencyMs };
+    }
+  } catch {
+    // fall through
+  }
+  return { result: null, isFallback: true, agentReply: null };
+}
+
+// ---------------------------------------------------------------------------
+// Workflow stubs — each mirrors an SNS Workbench workflow
+// ---------------------------------------------------------------------------
 
 /** Structure a company profile into the internal representation. */
 export async function analyzeCompany(profile) {
-  await simulateAiDelay(800);
+  const { result, isFallback } = await tryAgent('analyze-company', { profile });
+  if (!isFallback && result) return { ...profile, ...result, analyzed: true };
   return { ...profile, analyzed: true };
 }
 
-/** Extract text from an uploaded document (mocked). */
+/** Extract text from an uploaded document. */
 export async function processDocument(doc) {
-  await simulateAiDelay(1200);
+  const { result, isFallback } = await tryAgent('process-document', { document: doc });
+  if (!isFallback && result) {
+    return { ...doc, status: 'Processed', extractedText: extractAgentText(result) || result.extractedText, isSNSResult: true };
+  }
+  // Local fallback: simulate a short processing delay then flip to Processed
+  await new Promise((r) => setTimeout(r, 800));
   return {
     ...doc,
     status: 'Processed',
-    extractedText: `Mock extracted text for "${doc.name}". Real PDF extraction arrives with the SNS Workbench integration.`,
+    extractedText: `Mock extracted text for "${doc.name}". Connect the SNS Agent Workbench workflow to enable real PDF/OCR extraction.`,
   };
 }
 
-/** Rank opportunities against the profile (mock: re-rank by score). */
+/** Rank opportunities against the profile. */
 export async function findMatches(profile, opportunities) {
-  await simulateAiDelay(1600);
+  const { result, isFallback } = await tryAgent('find-matches', { profile, opportunityIds: opportunities.map(o => o.id) });
+  if (!isFallback && Array.isArray(result?.ranked)) return result.ranked;
+  // Local fallback
+  await new Promise((r) => setTimeout(r, 600));
   return [...opportunities].sort((a, b) => b.matchScore - a.matchScore);
 }
 
-/** Full bid-fit qualification for one opportunity. */
+/**
+ * Full bid-fit qualification for one opportunity.
+ * Returns the qualification result and annotates it with SNS metadata.
+ */
 export async function analyzeOpportunity(profile, documents, opportunity) {
-  await simulateAiDelay(1600);
-  return runQualification(profile, documents, opportunity);
+  const { result, isFallback, latencyMs } = await tryAgent('analyze-opportunity', {
+    profile,
+    documents: documents.map(d => ({ id: d.id, name: d.name, type: d.type, status: d.status })),
+    opportunity,
+  });
+
+  if (!isFallback && result) {
+    // Agent returned a structured result — annotate with SNS metadata
+    return {
+      ...result,
+      _meta: { source: 'SNS Agent Workbench', latencyMs, timestamp: new Date().toISOString() },
+    };
+  }
+
+  // Local fallback
+  const local = runQualification(profile, documents, opportunity);
+  return {
+    ...local,
+    _meta: { source: 'Local Engine (Fallback)', latencyMs: null, timestamp: new Date().toISOString() },
+  };
 }
 
-/** Eligibility-only check (mock: reads the opportunity's eligibility rows). */
+/** Eligibility-only check. */
 export async function checkEligibility(profile, opportunity) {
-  await simulateAiDelay(600);
+  const { result, isFallback } = await tryAgent('check-eligibility', { profile, opportunity });
+  if (!isFallback && result) return result;
+  // Local fallback
+  await new Promise((r) => setTimeout(r, 400));
   const items = opportunity.eligibility || [];
   const failed = items.filter((e) => e.status === 'fail');
   return { pass: failed.length === 0, items, failed };
 }
 
-/** Gap analysis (mock: derives gaps from match details). */
+/** Gap analysis. */
 export async function runGapAnalysis(profile, opportunity) {
-  await simulateAiDelay(800);
+  const { result, isFallback } = await tryAgent('gap-analysis', { profile, opportunity });
+  if (!isFallback && Array.isArray(result?.gaps)) return result.gaps;
+  await new Promise((r) => setTimeout(r, 600));
   return (opportunity.matchDetails || [])
     .filter((d) => d.status !== 'Matched')
     .map((d) => ({ requirement: d.requirement, status: d.status, evidence: d.evidence }));
 }
 
-/** Generate a full proposal draft, or regenerate a single section. When a
- *  qualification result is supplied the output reflects the analysis. */
+/**
+ * Generate a full proposal draft, or regenerate a single section.
+ * When a qualification result is supplied the output reflects the analysis.
+ */
 export async function generateProposal(profile, opportunity, sectionId = null, qualification = null) {
-  await simulateAiDelay(sectionId ? 1200 : 1600);
+  const { result, isFallback } = await tryAgent('generate-proposal', { profile, opportunity, sectionId, qualification });
+
+  if (!isFallback && result) {
+    if (sectionId) return result.content || result;
+    return result;
+  }
+
+  // Local fallback
+  await new Promise((r) => setTimeout(r, sectionId ? 1000 : 1400));
   if (sectionId) return generateSectionContent(sectionId, profile, opportunity, qualification);
   return createProposalDraft(opportunity, profile, qualification);
 }
 
 /** Compliance readiness report for an opportunity (consumes qualification). */
 export async function checkCompliance(opportunity, qualification, proposal, documents, reviews = {}) {
-  await simulateAiDelay(1000);
+  const { result, isFallback } = await tryAgent('check-compliance', {
+    opportunity,
+    qualification,
+    proposal,
+    documents: documents.map(d => ({ id: d.id, name: d.name, type: d.type, status: d.status })),
+    reviews,
+  });
+
+  if (!isFallback && result) return result;
+
+  await new Promise((r) => setTimeout(r, 800));
   return buildComplianceResult(opportunity, qualification, proposal, documents, reviews);
 }
